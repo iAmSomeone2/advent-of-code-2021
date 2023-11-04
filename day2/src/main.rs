@@ -2,9 +2,9 @@ use std::{fs, io};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Movement {
-    Forward(u32),
-    Down(u32),
-    Up(u32),
+    Forward(i32),
+    Down(i32),
+    Up(i32),
 }
 
 impl Movement {
@@ -13,7 +13,7 @@ impl Movement {
         let direction_str = word_iter.next().unwrap_or("forward").to_ascii_lowercase();
         let units_str = word_iter.next().unwrap_or("0");
 
-        let units: u32 = units_str.parse().unwrap_or(0);
+        let units: i32 = units_str.parse().unwrap_or(0);
         return match direction_str.as_str() {
             "forward" => Self::Forward(units),
             "down" => Self::Down(units),
@@ -24,8 +24,9 @@ impl Movement {
 }
 
 struct SubPosition {
-    horizontal: u32,
-    depth: u32,
+    horizontal: i32,
+    depth: i32,
+    aim: i32,
 }
 
 impl Default for SubPosition {
@@ -33,12 +34,13 @@ impl Default for SubPosition {
         Self {
             horizontal: 0,
             depth: 0,
+            aim: 0,
         }
     }
 }
 
 impl SubPosition {
-    fn positon_vector_len(&self) -> u32 {
+    fn positon_vector_len(&self) -> i32 {
         self.depth * self.horizontal
     }
 
@@ -55,6 +57,21 @@ impl SubPosition {
             }
         }
     }
+
+    fn apply_movement_v2(&mut self, movement: &Movement) {
+        match movement {
+            Movement::Forward(units) => {
+                self.horizontal += units;
+                self.depth += units * self.aim;
+            }
+            Movement::Down(units) => {
+                self.aim += units;
+            }
+            Movement::Up(units) => {
+                self.aim -= units;
+            }
+        }
+    }
 }
 
 fn load_test_data(path: &str) -> Result<Vec<Movement>, io::Error> {
@@ -67,14 +84,14 @@ fn load_test_data(path: &str) -> Result<Vec<Movement>, io::Error> {
     Ok(movements)
 }
 
-const TEST_DATA_PATH: &'static str = "test_data.txt";
+const TEST_DATA_PATH: &'static str = "input.txt";
 
 fn main() -> Result<(), io::Error> {
     let mut sub_position = SubPosition::default();
     let movements = load_test_data(TEST_DATA_PATH)?;
 
     for movement in movements {
-        sub_position.apply_movement(&movement);
+        sub_position.apply_movement_v2(&movement);
     }
     let position_vec_len = sub_position.positon_vector_len();
 
@@ -116,6 +133,27 @@ mod test {
         let mut sub_position = SubPosition::default();
         for movement in moves {
             sub_position.apply_movement(&movement);
+        }
+        assert_eq!(sub_position.horizontal, expected_horizontal);
+        assert_eq!(sub_position.depth, expected_depth);
+    }
+
+    #[test]
+    fn test_apply_movement_v2() {
+        let moves = [
+            Movement::Forward(5),
+            Movement::Down(5),
+            Movement::Forward(8),
+            Movement::Up(3),
+            Movement::Down(8),
+            Movement::Forward(2),
+        ];
+        let expected_horizontal = 15;
+        let expected_depth = 60;
+
+        let mut sub_position = SubPosition::default();
+        for movement in moves {
+            sub_position.apply_movement_v2(&movement);
         }
         assert_eq!(sub_position.horizontal, expected_horizontal);
         assert_eq!(sub_position.depth, expected_depth);
