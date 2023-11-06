@@ -95,26 +95,22 @@ impl BingoBoard {
     }
 
     pub fn sum_of_unmarked(&self) -> u32 {
-        let mut sum = 0;
-        for row in self.spaces {
-            for col in row {
-                if !col.marked {
-                    sum += col.value;
-                }
-            }
-        }
-        sum
+        self.spaces
+            .iter()
+            .flatten()
+            .filter(|&space| !space.marked)
+            .fold(0, |acc, space| acc + space.value)
     }
 
     pub fn mark_if_present(&mut self, value: u32, placement: &mut usize) {
-        for row in &mut self.spaces {
-            for col in row {
-                if col.value == value && !col.marked {
-                    col.marked = true;
-                    self.marked_count += 1;
-                }
-            }
-        }
+        self.spaces
+            .iter_mut()
+            .flatten()
+            .filter(|space| space.value == value)
+            .for_each(|space| {
+                space.marked = true;
+                self.marked_count += 1;
+            });
         self.determine_if_winner(value, placement);
     }
 
@@ -152,26 +148,8 @@ fn load_input_data(input: &str) -> (Vec<u32>, Vec<BingoBoard>) {
     (values, boards)
 }
 
-// fn run_game(vals: &[u32], boards: &mut [BingoBoard]) -> Option<(u32, usize)> {
-//     for i in 0..vals.len() {
-//         let val = vals[i];
-//         for board_idx in 0..boards.len() {
-//             let board = &mut boards[board_idx];
-//             board.mark_if_present(val);
-//             if i >= 4 && board.determine_if_winner() {
-//                 return Some((val, board_idx));
-//             }
-//         }
-//     }
-
-//     None
-// }
-
 /// Runs all of the Bingo games; determining winners, the order in which they won, and the associated winning values
-fn run_game_v2(
-    vals: &[u32],
-    boards: &mut [BingoBoard],
-) -> (Option<BingoBoard>, Option<BingoBoard>) {
+fn run_game(vals: &[u32], boards: &mut [BingoBoard]) -> (Option<BingoBoard>, Option<BingoBoard>) {
     let mut placement = 0;
     for i in 0..vals.len() {
         let val = vals[i];
@@ -213,7 +191,7 @@ fn main() -> anyhow::Result<()> {
     let (values, mut bingo_boards) = load_input_data(&input_str);
     drop(input_str);
 
-    let (first_winner, last_winner) = run_game_v2(&values, &mut bingo_boards);
+    let (first_winner, last_winner) = run_game(&values, &mut bingo_boards);
 
     match first_winner {
         Some(board) => {
@@ -346,20 +324,6 @@ mod test {
         assert_eq!(test_board.column_is_winner(marked_col), true);
     }
 
-    // #[test]
-    // fn test_is_winner() {
-    //     let mut test_board = BINGO_BOARD.clone();
-
-    //     assert_eq!(test_board.determine_if_winner(), false);
-
-    //     let marked_row = 4;
-    //     for x in 0..5 {
-    //         test_board.spaces[marked_row][x].marked = true;
-    //     }
-
-    //     assert_eq!(test_board.determine_if_winner(), true);
-    // }
-
     #[test]
     fn test_sum_of_unmarked() {
         let mut test_board = BINGO_BOARD.clone();
@@ -383,23 +347,10 @@ mod test {
         assert_eq!(bingo_boards.len(), 3);
     }
 
-    // #[test]
-    // fn test_run_game() {
-    //     let (values, mut bingo_boards) = load_input_data(TEST_INPUT_DATA);
-    //     let expected_board_idx = 2;
-    //     let expected_winning_val = 24;
-
-    //     let winner = run_game(&values, &mut bingo_boards);
-    //     assert!(winner.is_some());
-    //     let (winning_val, board_idx) = winner.unwrap();
-    //     assert_eq!(winning_val, expected_winning_val);
-    //     assert_eq!(board_idx, expected_board_idx);
-    // }
-
     #[test]
-    fn test_run_game_v2() {
+    fn test_run_game() {
         let (values, mut bingo_boards) = load_input_data(TEST_INPUT_DATA);
-        let (first_winner, last_winner) = run_game_v2(&values, &mut bingo_boards);
+        let (first_winner, last_winner) = run_game(&values, &mut bingo_boards);
 
         assert!(first_winner.is_some());
         // assert_eq!(first_winner, Some(expected_first_winner));
