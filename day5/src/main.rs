@@ -1,9 +1,11 @@
-use std::{fs, io, time::Instant};
+use std::{fs, io, path::PathBuf, time::Instant};
+
+use clap::Parser;
 
 #[macro_use]
 extern crate lazy_static;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 struct VentLine {
     start: (i32, i32),
     end: (i32, i32),
@@ -41,6 +43,46 @@ impl VentLine {
         }
     }
 
+    fn is_vertical(&self) -> bool {
+        self.slope.1 == 0
+    }
+
+    fn is_horizontal(&self) -> bool {
+        self.slope.0 == 0
+    }
+
+    fn is_angled(&self) -> bool {
+        !self.is_vertical() && !self.is_horizontal()
+    }
+
+    pub fn calculate_coverage(&self) -> Vec<(usize, usize)> {
+        let (x1, y1) = self.start;
+        let m = self.slope.0 as f32 / self.slope.1 as f32;
+        let b = (-x1 as f32 * m) + y1 as f32;
+
+        // Handle vertical lines
+        if self.is_vertical() {
+            return (self.y_min..=self.y_max)
+                .map(|y| (self.start.0 as usize, y as usize))
+                .collect();
+        }
+
+        // Handle horizontal lines
+        if self.is_horizontal() {
+            return (self.x_min..=self.x_max)
+                .map(|x| (x as usize, self.start.1 as usize))
+                .collect();
+        }
+
+        // All other lines
+        (self.x_min..=self.x_max)
+            .map(|x| {
+                let y = (m * (x as f32) + b).floor() as usize;
+                (x as usize, y)
+            })
+            .collect()
+    }
+
     pub fn intersects_with(&self, point: (i32, i32), include_angled: bool) -> bool {
         // Handle point being outside of line segment's range
         if point.0 < self.x_min
@@ -52,12 +94,12 @@ impl VentLine {
         }
 
         // Handle vertical line
-        if self.slope.1 == 0 {
+        if self.is_vertical() {
             return point.0 == self.start.0;
         }
 
         // Handle horizontal line {
-        if self.slope.0 == 0 {
+        if self.is_horizontal() {
             return point.1 == self.start.1;
         }
 
@@ -110,6 +152,16 @@ impl VentGrid {
     }
 
     pub fn calculate_coverage(&self, include_angled: bool) -> Vec<Vec<u32>> {
+        /*
+            This algorithm can be completely rewritten to be significantly faster.
+
+            1. Generate a list of covered coordinates for each VentLine.
+                - The start and end points and the equation of every VentLine are known and can be used to generate these lists.
+            2. Iterate over the list of VentLines instead of every grid cell
+                - The grid is roughly 1000 x 1000 (1,000,000 cells) vs. 500 VentLines multipled the number of covered coordinates (most definitely less than 1000 on average)
+            3. For every coordinate in a VentLine, increment the value in the cooresponding coverage cell.
+        */
+
         let mut coverage = vec![vec![0; self.width]; self.height];
 
         for y in 0..self.height {
@@ -123,6 +175,29 @@ impl VentGrid {
                     .count() as u32;
                 coverage[y][x] = hits;
             }
+        }
+
+        coverage
+    }
+
+    pub fn calculate_coverage_v2(&self, include_angled: bool) -> Vec<Vec<u32>> {
+        let mut coverage = vec![vec![0; self.width]; self.height];
+
+        let lines_coverage: Vec<(usize, usize)> = self
+            .vent_lines
+            .iter()
+            .filter(|vent_line| {
+                if include_angled {
+                    true
+                } else {
+                    !vent_line.is_angled()
+                }
+            })
+            .flat_map(|vent_line| vent_line.calculate_coverage())
+            .collect();
+
+        for (x, y) in lines_coverage {
+            coverage[y][x] += 1;
         }
 
         coverage
@@ -159,10 +234,22 @@ fn calculate_danger_score(coverage_grid: &Vec<Vec<u32>>) -> usize {
         .count()
 }
 
+#[derive(Parser)]
+#[command(author, version)]
+struct Args {
+    #[arg(long, default_value = "false")]
+    use_v1: bool,
+
+    #[arg(long, short, default_value = "input.txt")]
+    input_path: PathBuf,
+}
+
 fn main() -> Result<(), io::Error> {
+    let args = Args::parse();
+
     println!("Loading input...");
     let mut start_time = Instant::now();
-    let input = fs::read_to_string("input.txt")?;
+    let input = fs::read_to_string(args.input_path)?;
     let vent_grid = VentGrid::new(load_input_data(&input));
     drop(input);
     let mut elapsed = Instant::now() - start_time;
@@ -174,7 +261,11 @@ fn main() -> Result<(), io::Error> {
 
     println!("Calculating coverage (no angles)...");
     start_time = Instant::now();
-    let coverage_grid = vent_grid.calculate_coverage(false);
+    let coverage_grid = if args.use_v1 {
+        vent_grid.calculate_coverage(false)
+    } else {
+        vent_grid.calculate_coverage_v2(false)
+    };
     elapsed = Instant::now() - start_time;
     println!("done ({}ms)\n", elapsed.as_millis());
 
@@ -192,7 +283,11 @@ fn main() -> Result<(), io::Error> {
 
     println!("Calculating coverage (with angles)...");
     start_time = Instant::now();
-    let coverage_grid = vent_grid.calculate_coverage(true);
+    let coverage_grid = if args.use_v1 {
+        vent_grid.calculate_coverage(true)
+    } else {
+        vent_grid.calculate_coverage_v2(true)
+    };
     elapsed = Instant::now() - start_time;
     println!("done ({}ms)\n", elapsed.as_millis());
 
@@ -336,11 +431,29 @@ mod test {
     }
 
     #[test]
+    fn test_vent_grid_coverage_v2_no_angles() {
+        let vent_lines = load_input_data(TEST_INPUT_DATA_FULL);
+        let vent_grid = VentGrid::new(vent_lines);
+
+        let coverage = vent_grid.calculate_coverage_v2(false);
+        assert_eq!(coverage, COVERAGE_NO_ANGLES);
+    }
+
+    #[test]
     fn test_vent_grid_coverage_with_angles() {
         let vent_lines = load_input_data(TEST_INPUT_DATA_FULL);
         let vent_grid = VentGrid::new(vent_lines);
 
         let coverage = vent_grid.calculate_coverage(true);
+        assert_eq!(coverage, COVERAGE_WITH_ANGLES);
+    }
+
+    #[test]
+    fn test_vent_grid_coverage_v2_with_angles() {
+        let vent_lines = load_input_data(TEST_INPUT_DATA_FULL);
+        let vent_grid = VentGrid::new(vent_lines);
+
+        let coverage = vent_grid.calculate_coverage_v2(true);
         assert_eq!(coverage, COVERAGE_WITH_ANGLES);
     }
 
@@ -362,5 +475,27 @@ mod test {
         let coverage = vent_grid.calculate_coverage(true);
 
         assert_eq!(calculate_danger_score(&coverage), 12);
+    }
+
+    #[test]
+    fn test_vent_line_calculate_coverate() {
+        let test_data = [
+            (
+                VERTICAL_VENT_LINE.clone(),
+                vec![(2, 3), (2, 4), (2, 5), (2, 6), (2, 7), (2, 8)],
+            ),
+            (
+                HORIZONTAL_VENT_LINE.clone(),
+                vec![(3, 2), (4, 2), (5, 2), (6, 2), (7, 2), (8, 2)],
+            ),
+            (
+                VentLine::new((0, 0), (5, 5)),
+                vec![(0, 0), (1, 1), (2, 2), (3, 3), (4, 4), (5, 5)],
+            ),
+        ];
+
+        for (vent_line, expected_coverage) in test_data {
+            assert_eq!(vent_line.calculate_coverage(), expected_coverage);
+        }
     }
 }
