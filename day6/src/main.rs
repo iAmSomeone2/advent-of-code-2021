@@ -106,6 +106,9 @@ struct Args {
     /// Number of days to simulate
     #[arg(value_name = "DAYS")]
     simulation_time: usize,
+
+    #[arg(short, long)]
+    jobs: Option<usize>,
 }
 
 /*
@@ -127,8 +130,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     drop(input_data);
 
     // Determine how many threads can be used and how data should be split
-    let thread_count = thread::available_parallelism()?;
-    let subvec_size = lanternfish.len() / thread_count;
+    let available_threads = thread::available_parallelism()?;
+    let jobs = match args.jobs {
+        Some(jobs) => {
+            if jobs == 0 || jobs > available_threads.get() {
+                available_threads.get()
+            } else {
+                jobs
+            }
+        }
+        None => available_threads.get(),
+    };
+    let subvec_size = lanternfish.len() / jobs;
 
     // Set up progress indicators
     let multi_progress = MultiProgress::new();
@@ -137,10 +150,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     )
     .unwrap()
     .progress_chars("#>-");
-    let mut progress_bars = Vec::with_capacity(thread_count.get() + 1);
-    for i in 0..=thread_count.get() {
-        let pb = if i == thread_count.get() {
-            let total_iters = args.simulation_time * thread_count.get();
+    let mut progress_bars = Vec::with_capacity(jobs + 1);
+    for i in 0..=jobs {
+        let pb = if i == jobs {
+            let total_iters = args.simulation_time * jobs;
             let pb = multi_progress.add(ProgressBar::new(total_iters as u64));
             pb.set_style(sty.clone());
             pb
@@ -154,21 +167,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Set up channels and threads
     let (count_tx, count_rx) = mpsc::channel::<usize>();
-    let mut children = Vec::with_capacity(thread_count.get());
+    let mut children = Vec::with_capacity(jobs);
     let mut fish_counts = vec![0];
 
-    for id in 0..thread_count.get() {
+    for id in 0..jobs {
         let simulation_time = args.simulation_time;
         let thread_count_tx = count_tx.clone();
 
-        let subvec_range =
-            compute_subvec_range(lanternfish.len(), subvec_size, id, thread_count.get());
+        let subvec_range = compute_subvec_range(lanternfish.len(), subvec_size, id, jobs);
         let mut subvec: Vec<Lanternfish> = subvec_range.map(|i| lanternfish[i]).collect();
 
         // Set up the thread's progress bar
         let thread_pb = progress_bars[id].clone();
         thread_pb.set_message(format!("thread {id}: simulating"));
-        let total_pb = progress_bars[thread_count.get()].clone();
+        let total_pb = progress_bars[jobs].clone();
 
         let child = thread::spawn(move || {
             let count = Lanternfish::simulate_spawning_group(
@@ -187,7 +199,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     for _ in 0..children.len() {
         fish_counts.push(count_rx.recv().unwrap_or(0));
     }
-    progress_bars[thread_count.get()].finish_with_message("all done");
+    progress_bars[jobs].finish_with_message("all done");
 
     // Join all child threads
     for child in children {
