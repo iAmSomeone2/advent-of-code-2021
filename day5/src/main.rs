@@ -14,6 +14,7 @@ struct VentLine {
     x_max: i32,
     y_min: i32,
     y_max: i32,
+    covered_points: Option<Vec<(usize, usize)>>,
 }
 
 impl VentLine {
@@ -40,6 +41,7 @@ impl VentLine {
             x_max,
             y_min,
             y_max,
+            covered_points: None,
         }
     }
 
@@ -55,32 +57,45 @@ impl VentLine {
         !self.is_vertical() && !self.is_horizontal()
     }
 
-    pub fn calculate_coverage(&self) -> Vec<(usize, usize)> {
+    /// Calculates the points covered by the VentLine and stores the results in the struct
+    pub fn calculate_coverage(&mut self, recalculate: bool) {
+        if self.covered_points.is_some() && !recalculate {
+            return;
+        }
+
         let (x1, y1) = self.start;
         let m = self.slope.0 as f32 / self.slope.1 as f32;
         let b = (-x1 as f32 * m) + y1 as f32;
 
         // Handle vertical lines
         if self.is_vertical() {
-            return (self.y_min..=self.y_max)
-                .map(|y| (self.start.0 as usize, y as usize))
-                .collect();
+            self.covered_points = Some(
+                (self.y_min..=self.y_max)
+                    .map(|y| (self.start.0 as usize, y as usize))
+                    .collect(),
+            );
+            return;
         }
 
         // Handle horizontal lines
         if self.is_horizontal() {
-            return (self.x_min..=self.x_max)
-                .map(|x| (x as usize, self.start.1 as usize))
-                .collect();
+            self.covered_points = Some(
+                (self.x_min..=self.x_max)
+                    .map(|x| (x as usize, self.start.1 as usize))
+                    .collect(),
+            );
+            return;
         }
 
         // All other lines
-        (self.x_min..=self.x_max)
-            .map(|x| {
-                let y = (m * (x as f32) + b).floor() as usize;
-                (x as usize, y)
-            })
-            .collect()
+        self.covered_points = Some(
+            (self.x_min..=self.x_max)
+                .map(|x| {
+                    let y = (m * (x as f32) + b).floor() as usize;
+                    (x as usize, y)
+                })
+                .collect(),
+        );
     }
 
     pub fn intersects_with(&self, point: (i32, i32), include_angled: bool) -> bool {
@@ -180,12 +195,11 @@ impl VentGrid {
         coverage
     }
 
-    pub fn calculate_coverage_v2(&self, include_angled: bool) -> Vec<Vec<u32>> {
+    pub fn calculate_coverage_v2(&mut self, include_angled: bool) -> Vec<Vec<u32>> {
         let mut coverage = vec![vec![0; self.width]; self.height];
 
-        let lines_coverage: Vec<(usize, usize)> = self
-            .vent_lines
-            .iter()
+        self.vent_lines
+            .iter_mut()
             .filter(|vent_line| {
                 if include_angled {
                     true
@@ -193,11 +207,19 @@ impl VentGrid {
                     !vent_line.is_angled()
                 }
             })
-            .flat_map(|vent_line| vent_line.calculate_coverage())
-            .collect();
+            .for_each(|vent_line| {
+                vent_line.calculate_coverage(false);
+            });
 
-        for (x, y) in lines_coverage {
-            coverage[y][x] += 1;
+        for vent_line in &self.vent_lines {
+            match &vent_line.covered_points {
+                Some(covered_points) => {
+                    for (x, y) in covered_points {
+                        coverage[*y][*x] += 1;
+                    }
+                }
+                None => {}
+            }
         }
 
         coverage
@@ -250,7 +272,7 @@ fn main() -> Result<(), io::Error> {
     println!("Loading input...");
     let mut start_time = Instant::now();
     let input = fs::read_to_string(args.input_path)?;
-    let vent_grid = VentGrid::new(load_input_data(&input));
+    let mut vent_grid = VentGrid::new(load_input_data(&input));
     drop(input);
     let mut elapsed = Instant::now() - start_time;
     println!("done ({}ms)\n", elapsed.as_millis());
@@ -365,7 +387,8 @@ mod test {
                 x_min: 2,
                 x_max: 6,
                 y_min: 3,
-                y_max: 4
+                y_max: 4,
+                covered_points: None,
             }
         );
     }
@@ -433,7 +456,7 @@ mod test {
     #[test]
     fn test_vent_grid_coverage_v2_no_angles() {
         let vent_lines = load_input_data(TEST_INPUT_DATA_FULL);
-        let vent_grid = VentGrid::new(vent_lines);
+        let mut vent_grid = VentGrid::new(vent_lines);
 
         let coverage = vent_grid.calculate_coverage_v2(false);
         assert_eq!(coverage, COVERAGE_NO_ANGLES);
@@ -451,7 +474,7 @@ mod test {
     #[test]
     fn test_vent_grid_coverage_v2_with_angles() {
         let vent_lines = load_input_data(TEST_INPUT_DATA_FULL);
-        let vent_grid = VentGrid::new(vent_lines);
+        let mut vent_grid = VentGrid::new(vent_lines);
 
         let coverage = vent_grid.calculate_coverage_v2(true);
         assert_eq!(coverage, COVERAGE_WITH_ANGLES);
@@ -494,8 +517,9 @@ mod test {
             ),
         ];
 
-        for (vent_line, expected_coverage) in test_data {
-            assert_eq!(vent_line.calculate_coverage(), expected_coverage);
+        for (mut vent_line, expected_coverage) in test_data {
+            vent_line.calculate_coverage(false);
+            assert_eq!(vent_line.covered_points, Some(expected_coverage));
         }
     }
 }
