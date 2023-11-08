@@ -33,33 +33,42 @@ impl Lanternfish {
         }
     }
 
-    fn simulate_spawning(
-        lanternfish: &mut Vec<Lanternfish>,
-        simulation_time: usize,
+    /// Simulate spawning for a given period and return the total number of fish
+    pub fn simulate_spawning(&self, sim_time: usize) -> usize {
+        let mut spawns = vec![self.clone()];
+        for _ in 0..sim_time {
+            let mut new_spawns: Vec<Lanternfish> = spawns
+                .iter_mut()
+                .map(|spawn| spawn.simulate_day())
+                .filter(|new_spawn| new_spawn.is_some())
+                .map(|new_spawn| new_spawn.unwrap())
+                .collect();
+            spawns.append(&mut new_spawns);
+        }
+
+        spawns.len()
+    }
+
+    fn simulate_spawning_group(
+        lanternfish: &Vec<Lanternfish>,
+        sim_time: usize,
         pb: Option<&ProgressBar>,
         total_pb: Option<&ProgressBar>,
-    ) {
-        for _ in 0..simulation_time {
-            for i in 0..lanternfish.len() {
-                let fish = &mut lanternfish[i];
-                match fish.simulate_day() {
-                    Some(new_fish) => lanternfish.push(new_fish),
-                    None => {}
-                }
-            }
+    ) -> usize {
+        match pb {
+            Some(pb) => pb.set_length(lanternfish.len() as u64),
+            None => {}
+        }
+
+        let mut count = 0;
+        for fish in lanternfish {
+            count += fish.simulate_spawning(sim_time);
             match pb {
-                Some(pb) => {
-                    pb.inc(1);
-                }
-                None => {}
-            }
-            match total_pb {
-                Some(pb) => {
-                    pb.inc(1);
-                }
+                Some(pb) => pb.inc(1),
                 None => {}
             }
         }
+        count
     }
 }
 
@@ -162,14 +171,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let total_pb = progress_bars[thread_count.get()].clone();
 
         let child = thread::spawn(move || {
-            Lanternfish::simulate_spawning(
+            let count = Lanternfish::simulate_spawning_group(
                 &mut subvec,
                 simulation_time,
                 Some(&thread_pb),
                 Some(&total_pb),
             );
             thread_pb.finish_with_message(format!("thread {id}: done"));
-            thread_count_tx.send(subvec.len()).unwrap();
+            thread_count_tx.send(count).unwrap();
         });
         children.push(child);
     }
@@ -250,13 +259,14 @@ mod test {
     }
 
     #[test]
-    fn simulate_spawning_test() {
+    fn simulate_spawning_group_test() {
         let test_data = [(18, 26), (80, 5934)];
 
         for (sim_time, expected_count) in test_data {
-            let mut test_fish = TEST_FISH.clone();
-            Lanternfish::simulate_spawning(&mut test_fish, sim_time, None, None);
-            assert_eq!(test_fish.len(), expected_count);
+            let test_fish = TEST_FISH.clone();
+            let count = Lanternfish::simulate_spawning_group(&test_fish, sim_time, None, None);
+
+            assert_eq!(count, expected_count);
         }
     }
 }
