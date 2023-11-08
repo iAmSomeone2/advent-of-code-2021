@@ -1,11 +1,10 @@
-use std::{fs, io, path::PathBuf, time::Instant};
-
-use clap::Parser;
-
 #[macro_use]
 extern crate lazy_static;
+use clap::Parser;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use std::{error::Error, fs, ops::Range, path::PathBuf, sync::mpsc, thread};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 struct Lanternfish {
     spawn_timer: u8,
 }
@@ -34,7 +33,12 @@ impl Lanternfish {
         }
     }
 
-    fn simulate_spawning(lanternfish: &mut Vec<Lanternfish>, simulation_time: usize) {
+    fn simulate_spawning(
+        lanternfish: &mut Vec<Lanternfish>,
+        simulation_time: usize,
+        pb: Option<&ProgressBar>,
+        total_pb: Option<&ProgressBar>,
+    ) {
         for _ in 0..simulation_time {
             for i in 0..lanternfish.len() {
                 let fish = &mut lanternfish[i];
@@ -42,6 +46,18 @@ impl Lanternfish {
                     Some(new_fish) => lanternfish.push(new_fish),
                     None => {}
                 }
+            }
+            match pb {
+                Some(pb) => {
+                    pb.inc(1);
+                }
+                None => {}
+            }
+            match total_pb {
+                Some(pb) => {
+                    pb.inc(1);
+                }
+                None => {}
             }
         }
     }
@@ -53,6 +69,22 @@ fn load_input_data(input: &str) -> Vec<Lanternfish> {
         .filter_map(|val| val.parse::<u8>().ok())
         .map(|timer| Lanternfish::new(timer))
         .collect()
+}
+
+fn compute_subvec_range(
+    vec_size: usize,
+    subvec_size: usize,
+    iteration: usize,
+    max_iter: usize,
+) -> Range<usize> {
+    let subvec_start = iteration * subvec_size;
+    let subvec_end = if iteration < max_iter - 1 {
+        subvec_start + subvec_size
+    } else {
+        vec_size
+    };
+
+    subvec_start..subvec_end
 }
 
 #[derive(Parser)]
@@ -67,24 +99,96 @@ struct Args {
     simulation_time: usize,
 }
 
-fn main() -> Result<(), io::Error> {
+/*
+    # Improving Performance
+
+    - Split data set according to the number of available cores
+    - Run simulations in parallel
+    - Have each thread use a channel to return the final count
+        - Use another channel to return processing status
+    - Sum the final counts from all simulations
+*/
+
+fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
+    // Load input data
     let input_data = fs::read_to_string(args.input_path)?;
-    let mut lanternfish = load_input_data(&input_data);
+    let lanternfish = load_input_data(&input_data);
     drop(input_data);
 
-    println!("Simulating lanternfish spawning...");
-    let start_time = Instant::now();
-    Lanternfish::simulate_spawning(&mut lanternfish, args.simulation_time);
-    let run_duration = Instant::now() - start_time;
-    println!("done ({}ms)\n", run_duration.as_millis());
+    // Determine how many threads can be used and how data should be split
+    let thread_count = thread::available_parallelism()?;
+    let subvec_size = lanternfish.len() / thread_count;
 
-    println!(
-        "Results:\n\tLanternfish count:\t{}\n\tSim time:\t\t{} days",
-        lanternfish.len(),
-        args.simulation_time
-    );
+    // Set up progress indicators
+    let multi_progress = MultiProgress::new();
+    let sty = ProgressStyle::with_template(
+        "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+    )
+    .unwrap()
+    .progress_chars("#>-");
+    let mut progress_bars = Vec::with_capacity(thread_count.get() + 1);
+    for i in 0..=thread_count.get() {
+        let pb = if i == thread_count.get() {
+            let total_iters = args.simulation_time * thread_count.get();
+            let pb = multi_progress.add(ProgressBar::new(total_iters as u64));
+            pb.set_style(sty.clone());
+            pb
+        } else {
+            let pb = multi_progress.add(ProgressBar::new(args.simulation_time as u64));
+            pb.set_style(sty.clone());
+            pb
+        };
+        progress_bars.push(pb);
+    }
+
+    // Set up channels and threads
+    let (count_tx, count_rx) = mpsc::channel::<usize>();
+    let mut children = Vec::with_capacity(thread_count.get());
+    let mut fish_counts = vec![0];
+
+    for id in 0..thread_count.get() {
+        let simulation_time = args.simulation_time;
+        let thread_count_tx = count_tx.clone();
+
+        let subvec_range =
+            compute_subvec_range(lanternfish.len(), subvec_size, id, thread_count.get());
+        let mut subvec: Vec<Lanternfish> = subvec_range.map(|i| lanternfish[i]).collect();
+
+        // Set up the thread's progress bar
+        let thread_pb = progress_bars[id].clone();
+        thread_pb.set_message(format!("thread {id}: simulating"));
+        let total_pb = progress_bars[thread_count.get()].clone();
+
+        let child = thread::spawn(move || {
+            Lanternfish::simulate_spawning(
+                &mut subvec,
+                simulation_time,
+                Some(&thread_pb),
+                Some(&total_pb),
+            );
+            thread_pb.finish_with_message(format!("thread {id}: done"));
+            thread_count_tx.send(subvec.len()).unwrap();
+        });
+        children.push(child);
+    }
+    drop(lanternfish);
+
+    for _ in 0..children.len() {
+        fish_counts.push(count_rx.recv().unwrap_or(0));
+    }
+    progress_bars[thread_count.get()].finish_with_message("all done");
+
+    // Join all child threads
+    for child in children {
+        child.join().expect("Child thread panicked");
+    }
+
+    multi_progress.clear()?;
+
+    let total: usize = fish_counts.iter().sum();
+    println!("\nTotal: {total}");
 
     Ok(())
 }
@@ -108,6 +212,20 @@ mod test {
     #[test]
     fn load_input_data_test() {
         assert_eq!(load_input_data(TEST_INPUT), *TEST_FISH);
+    }
+
+    #[test]
+    fn compute_subvec_range_test() {
+        let vec_size = 9;
+        let subvec_size = 2;
+        let max_iter = 5;
+
+        let expected = [0..2, 2..4, 4..6, 6..8, 8..9];
+
+        for i in 0..max_iter {
+            let computed_range = compute_subvec_range(vec_size, subvec_size, i, max_iter);
+            assert_eq!(computed_range, expected[i]);
+        }
     }
 
     #[test]
@@ -137,7 +255,7 @@ mod test {
 
         for (sim_time, expected_count) in test_data {
             let mut test_fish = TEST_FISH.clone();
-            Lanternfish::simulate_spawning(&mut test_fish, sim_time);
+            Lanternfish::simulate_spawning(&mut test_fish, sim_time, None, None);
             assert_eq!(test_fish.len(), expected_count);
         }
     }
